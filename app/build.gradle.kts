@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     id("kotlin-parcelize")
+    alias(libs.plugins.ksp)
 }
 
 val localProperties = Properties()
@@ -48,13 +49,15 @@ android {
         create("staging") {
             dimension = "environment"
             applicationIdSuffix = ".staging"
+            val key = localProperties.getProperty("apiKey")?.replace("\"", "") ?: ""
             buildConfigField("String", "BASE_URL", "\"https://sh-apk-api-production.up.railway.app/\"")
-            buildConfigField("String", "API_KEY", "\"${localProperties.getProperty("apiKey")}\"")
+            buildConfigField("String", "API_KEY", "\"$key\"")
         }
         create("prod") {
             dimension = "environment"
+            val key = localProperties.getProperty("apiKey")?.replace("\"", "") ?: ""
             buildConfigField("String", "BASE_URL", "\"https://sh-apk-api-production.up.railway.app/\"")
-            buildConfigField("String", "API_KEY", "\"${localProperties.getProperty("apiKey")}\"")
+            buildConfigField("String", "API_KEY", "\"$key\"")
         }
     }
 
@@ -65,7 +68,7 @@ android {
 }
 
 dependencies {
-    implementation(files("libs/samsung-health-data-api-1.0.0.aar"))
+    implementation("androidx.health.connect:connect-client:1.1.0-alpha07")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -86,6 +89,11 @@ dependencies {
 
     // Background Work
     implementation(libs.androidx.work.runtime.ktx)
+
+    // Room
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

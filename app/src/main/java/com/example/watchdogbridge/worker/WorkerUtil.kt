@@ -1,45 +1,60 @@
 package com.example.watchdogbridge.worker
 
 import android.content.Context
-import androidx.work.BackoffPolicy
+import android.util.Log
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import java.time.Duration
-import java.time.LocalDateTime
 import java.util.concurrent.TimeUnit
 
 object WorkerUtil {
+    private const val TAG = "WorkerUtil"
 
-    fun scheduleDailySync(context: Context) {
-        val constraints = Constraints.Builder()
+    fun scheduleWorkers(context: Context) {
+        Log.d(TAG, "Scheduling workers...")
+
+        val dailyConstraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
             .build()
 
-        val initialDelay = calculateInitialDelay()
+        val intradayConstraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            // Battery constraint removed for intraday to ensure execution
+            .build()
 
-        val workRequest = PeriodicWorkRequestBuilder<SamsungHealthDailyWorker>(24, TimeUnit.HOURS)
-            .setConstraints(constraints)
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
-            .setInitialDelay(initialDelay, TimeUnit.MILLISECONDS)
+        // 1. Intraday Worker (Every 60 mins)
+        val intradayRequest = PeriodicWorkRequestBuilder<HealthConnectIntradayWorker>(
+            60, TimeUnit.MINUTES,
+            15, TimeUnit.MINUTES // Flex interval
+        )
+            .setConstraints(intradayConstraints)
+            .addTag("intraday_sync")
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            "HealthConnectIntradaySync",
+            ExistingPeriodicWorkPolicy.UPDATE,
+            intradayRequest
+        )
+        Log.d(TAG, "Intraday worker scheduled with UPDATE policy")
+
+        // 2. Daily Sync Worker (Every 6 hours)
+        val dailyRequest = PeriodicWorkRequestBuilder<HealthConnectDailyWorker>(
+            6, TimeUnit.HOURS,
+            30, TimeUnit.MINUTES
+        )
+            .setConstraints(dailyConstraints)
             .addTag("daily_sync")
             .build()
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            "daily_sync_work",
-            ExistingPeriodicWorkPolicy.KEEP, // Keep existing if already scheduled
-            workRequest
+            "HealthConnectDailySync",
+            ExistingPeriodicWorkPolicy.UPDATE, // Update to apply new constraints/intervals if changed
+            dailyRequest
         )
-    }
-
-    private fun calculateInitialDelay(): Long {
-        val now = LocalDateTime.now()
-        var target = now.withHour(2).withMinute(30).withSecond(0).withNano(0)
-        if (now.isAfter(target)) {
-            target = target.plusDays(1)
-        }
-        return Duration.between(now, target).toMillis()
+        Log.d(TAG, "Daily worker scheduled")
     }
 }

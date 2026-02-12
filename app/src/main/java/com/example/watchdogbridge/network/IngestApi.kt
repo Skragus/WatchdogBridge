@@ -9,6 +9,9 @@ import retrofit2.http.POST
 interface IngestApi {
     @POST("/v1/ingest/shealth/daily")
     suspend fun postDaily(@Body body: DailyIngestRequest): Response<IngestResponse>
+
+    @POST("/v1/ingest/shealth/intraday")
+    suspend fun postIntraday(@Body body: DailyIngestRequest): Response<IngestResponse>
 }
 
 @Serializable
