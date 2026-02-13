@@ -30,6 +30,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.example.watchdogbridge.data.HealthConnectRepository
+import com.example.watchdogbridge.data.PreferencesRepository
 import com.example.watchdogbridge.ui.theme.WatchdogBridgeTheme
 import com.example.watchdogbridge.worker.HealthConnectDailyWorker
 import com.example.watchdogbridge.worker.HealthConnectIntradayWorker
@@ -37,10 +38,14 @@ import com.example.watchdogbridge.worker.WorkerUtil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
 
     private val healthRepo by lazy { HealthConnectRepository(applicationContext) }
+    private val prefsRepo by lazy { PreferencesRepository(applicationContext) }
     private var statusText by mutableStateOf("Ready")
     
     private var onPermissionsResult: ((Boolean) -> Unit)? = null
@@ -145,7 +150,13 @@ class MainActivity : ComponentActivity() {
             try {
                 val workManager = WorkManager.getInstance(applicationContext)
                 val workInfos = workManager.getWorkInfosForUniqueWork("HealthConnectIntradaySync").get()
-                
+                val lastRun = prefsRepo.getLastIntradayRun()
+                val lastRunText = if (lastRun > 0) {
+                     SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(lastRun))
+                } else {
+                    "Never"
+                }
+
                 withContext(Dispatchers.Main) {
                     if (!workInfos.isNullOrEmpty()) {
                         val workInfo = workInfos[0]
@@ -154,9 +165,9 @@ class MainActivity : ComponentActivity() {
                         } else {
                             ""
                         }
-                        statusText = "Intraday Worker: ${workInfo.state}$nextRun\nID: ${workInfo.id}"
+                        statusText = "Intraday Worker: ${workInfo.state}$nextRun\nID: ${workInfo.id}\nLast Run: $lastRunText"
                     } else {
-                        statusText = "Intraday Worker not found (Not Scheduled)"
+                        statusText = "Intraday Worker not found (Not Scheduled)\nLast Run: $lastRunText"
                     }
                 }
             } catch (e: Exception) {

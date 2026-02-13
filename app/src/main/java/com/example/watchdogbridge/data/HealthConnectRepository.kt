@@ -144,11 +144,33 @@ class HealthConnectRepository(private val context: Context) {
             }
 
             if (avg != null) {
-                val finalResting = resting?.toInt() ?: avg.toInt()
+                val avgInt = avg.toInt()
+                val minInt = min?.toInt() ?: 0
+                val maxInt = max?.toInt() ?: 0
+                val finalResting = resting?.toInt() ?: avgInt
+
+                // Validation
+                if (avgInt < 30 || avgInt > 250) {
+                    Log.w(TAG, "Invalid heart rate (avg): $avgInt bpm, rejecting summary")
+                    return null
+                }
+                if (minInt != 0 && (minInt < 30 || minInt > 250)) {
+                    Log.w(TAG, "Invalid heart rate (min): $minInt bpm, rejecting summary")
+                    return null
+                }
+                if (maxInt != 0 && (maxInt < 30 || maxInt > 250)) {
+                    Log.w(TAG, "Invalid heart rate (max): $maxInt bpm, rejecting summary")
+                    return null
+                }
+                if (resting != null && (finalResting < 30 || finalResting > 250)) {
+                    Log.w(TAG, "Invalid heart rate (resting): $finalResting bpm, rejecting summary")
+                    return null
+                }
+
                 HeartRateSummary(
-                    avgHr = avg.toInt(),
-                    minHr = min?.toInt() ?: 0,
-                    maxHr = max?.toInt() ?: 0,
+                    avgHr = avgInt,
+                    minHr = minInt,
+                    maxHr = maxInt,
                     restingHr = finalResting
                 )
             } else {
@@ -227,6 +249,20 @@ class HealthConnectRepository(private val context: Context) {
             Log.e(TAG, "Error reading body metrics", e)
         }
         
+        // Validation
+        if (weight != null) {
+            if (weight < 30 || weight > 300) {
+                Log.w(TAG, "Invalid weight: $weight kg, rejecting body_metrics")
+                return null
+            }
+        }
+        if (bodyFat != null) {
+            if (bodyFat < 3 || bodyFat > 70) {
+                Log.w(TAG, "Invalid body fat: $bodyFat %, rejecting body_metrics")
+                return null
+            }
+        }
+
         if (weight == null && bodyFat == null) {
             return null
         }
@@ -247,6 +283,20 @@ class HealthConnectRepository(private val context: Context) {
             val calories = response[NutritionRecord.ENERGY_TOTAL]?.inKilocalories?.toInt()
             val protein = response[NutritionRecord.PROTEIN_TOTAL]?.inGrams
             
+            // Validation
+            if (calories != null) {
+                if (calories < 0 || calories > 10000) {
+                    Log.w(TAG, "Invalid total calories: $calories, rejecting nutrition")
+                    return null
+                }
+            }
+            if (protein != null) {
+                if (protein < 0) {
+                    Log.w(TAG, "Invalid protein: $protein g, rejecting nutrition")
+                    return null
+                }
+            }
+
             if (calories == null && protein == null) {
                 null
             } else {

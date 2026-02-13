@@ -28,8 +28,10 @@ class HealthConnectIntradayWorker(
     private val TAG = "HCIntradayWorker"
 
     override suspend fun doWork(): Result {
+        val startTime = System.currentTimeMillis()
+        Log.i(TAG, "Starting intraday sync execution at $startTime")
+
         try {
-            Log.d(TAG, "Starting intraday sync")
             val deviceId = preferencesRepository.getDeviceId()
 
             // Target: Today
@@ -42,8 +44,10 @@ class HealthConnectIntradayWorker(
             val now = System.currentTimeMillis()
 
             if (!healthConnectRepository.hasPermissions()) {
-                Log.d(TAG, "Permissions missing, skipping")
-                return Result.failure()
+                Log.w(TAG, "Permissions missing, cannot sync. Retrying later.")
+                // Using retry() so WorkManager keeps this job alive and tries again
+                // (though without permissions, it will keep failing until granted)
+                return Result.retry()
             }
 
             // Fetch Data
@@ -74,7 +78,8 @@ class HealthConnectIntradayWorker(
             // Check Local State
             val lastState = syncStateDao.getSyncState(dateStr)
             if (lastState != null && lastState.dataHash == currentHash) {
-                Log.d(TAG, "Data unchanged for $dateStr, skipping upload.")
+                Log.i(TAG, "Data unchanged for $dateStr (Hash: $currentHash), skipping upload.")
+                updateLastRunTime()
                 return Result.success()
             }
 
@@ -91,7 +96,8 @@ class HealthConnectIntradayWorker(
                     attemptCount = 0
                 )
                 syncStateDao.insertOrUpdate(newState)
-                Log.d(TAG, "Intraday sync successful")
+                Log.i(TAG, "Intraday sync successful. Response: ${response.code()}")
+                updateLastRunTime()
                 return Result.success()
             } else {
                 Log.e(TAG, "Server error: ${response.code()} ${response.message()}")
@@ -100,8 +106,17 @@ class HealthConnectIntradayWorker(
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error in intraday worker", e)
-            return Result.failure()
+            Log.e(TAG, "Error in intraday worker execution", e)
+            // Retry on exception ensures transient errors don't kill the periodic schedule
+            // (Though PeriodicWorkRequest stays alive on failure too, retry allows backoff)
+            return Result.retry()
+        } finally {
+            val duration = System.currentTimeMillis() - startTime
+            Log.i(TAG, "Intraday worker finished in ${duration}ms")
         }
+    }
+
+    private fun updateLastRunTime() {
+        preferencesRepository.setLastIntradayRun(System.currentTimeMillis())
     }
 }
