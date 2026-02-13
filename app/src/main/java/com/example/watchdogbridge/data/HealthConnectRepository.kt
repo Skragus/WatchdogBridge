@@ -1,6 +1,7 @@
 package com.example.watchdogbridge.data
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
@@ -37,7 +38,7 @@ class HealthConnectRepository(private val context: Context) {
     }
 
     suspend fun getPermissions(): Set<String> {
-        return setOf(
+        val permissions = mutableSetOf(
             HealthPermission.getReadPermission(StepsRecord::class),
             HealthPermission.getReadPermission(SleepSessionRecord::class),
             HealthPermission.getReadPermission(HeartRateRecord::class),
@@ -47,6 +48,11 @@ class HealthConnectRepository(private val context: Context) {
             HealthPermission.getReadPermission(BodyFatRecord::class),
             HealthPermission.getReadPermission(NutritionRecord::class)
         )
+        // Background read permission is only available/needed on Android 14+ (API 34)
+        if (Build.VERSION.SDK_INT >= 34) {
+            permissions.add("android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND")
+        }
+        return permissions
     }
 
     suspend fun hasPermissions(): Boolean {

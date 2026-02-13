@@ -1,10 +1,17 @@
 package com.example.watchdogbridge
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -24,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import androidx.work.OneTimeWorkRequestBuilder
@@ -50,7 +58,8 @@ class MainActivity : ComponentActivity() {
     
     private var onPermissionsResult: ((Boolean) -> Unit)? = null
     
-    private val requestPermissions = registerForActivityResult(
+    // Health Connect Permission Launcher
+    private val requestHealthPermissions = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
         lifecycleScope.launch {
@@ -63,12 +72,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Notification Permission Launcher (Android 13+)
+    private val requestNotificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            statusText = "Notification Permission Granted"
+        } else {
+            statusText = "Notification Permission Denied. Please enable in Settings."
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         // Schedule periodic workers
         WorkerUtil.scheduleWorkers(applicationContext)
+
+        // Check for Notification Permission on startup (Android 13+)
+        checkNotificationPermission()
 
         setContent {
             WatchdogBridgeTheme {
@@ -93,11 +116,53 @@ class MainActivity : ComponentActivity() {
                         onTriggerIntradayClick = {
                             statusText = "Intraday Sync queued..."
                             triggerIntradaySync()
+                        },
+                        onTestWatchdogClick = {
+                            testWatchdogReceiver()
+                        },
+                        onRequestNotifyClick = {
+                            if (Build.VERSION.SDK_INT >= 33) {
+                                if (shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+                                    statusText = "Please allow notifications in the dialog."
+                                    requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                    // Likely permanently denied or first time
+                                    requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    statusText = "Notifications already enabled."
+                                }
+                            } else {
+                                // Check if notifications are disabled at app level
+                                val notificationManager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+                                if (!notificationManager.areNotificationsEnabled()) {
+                                    statusText = "Notifications are disabled. Opening Settings..."
+                                    openAppSettings()
+                                } else {
+                                    statusText = "Notifications enabled (Android < 13)"
+                                }
+                            }
                         }
                     )
                 }
             }
         }
+    }
+
+    private fun checkNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                // We'll let the user trigger it via button to avoid spamming on launch, 
+                // or just log it. For now, let's leave it to the UI button.
+                Log.d("MainActivity", "Notification permission not granted yet.")
+            }
+        }
+    }
+    
+    private fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+        }
+        startActivity(intent)
     }
 
     private fun connectToHealth(onResult: (Boolean) -> Unit) {
@@ -106,7 +171,7 @@ class MainActivity : ComponentActivity() {
                 onResult(true)
             } else {
                 onPermissionsResult = onResult
-                requestPermissions.launch(healthRepo.getPermissions())
+                requestHealthPermissions.launch(healthRepo.getPermissions())
             }
         }
     }
@@ -127,6 +192,13 @@ class MainActivity : ComponentActivity() {
         WorkManager.getInstance(applicationContext).enqueue(request)
 
         observeWork(request.id, "Intraday Sync")
+    }
+
+    private fun testWatchdogReceiver() {
+        val intent = android.content.Intent("com.example.watchdogbridge.RESTART_ALL_WORKERS")
+        intent.setPackage(packageName)
+        sendBroadcast(intent)
+        statusText = "Watchdog Broadcast Sent!"
     }
 
     private fun observeWork(id: java.util.UUID, taskName: String) {
@@ -187,7 +259,9 @@ fun MainScreen(
     onConnectClick: () -> Unit,
     onTestSyncClick: () -> Unit,
     onCheckStatusClick: () -> Unit,
-    onTriggerIntradayClick: () -> Unit
+    onTriggerIntradayClick: () -> Unit,
+    onTestWatchdogClick: () -> Unit,
+    onRequestNotifyClick: () -> Unit
 ) {
     Column(
         modifier = modifier
@@ -206,6 +280,12 @@ fun MainScreen(
         }
         
         Spacer(Modifier.height(16.dp))
+
+        Button(onClick = onRequestNotifyClick) {
+            Text("Enable Notifications")
+        }
+
+        Spacer(Modifier.height(16.dp))
         
         Button(onClick = onCheckStatusClick) {
             Text("Check Periodic Status")
@@ -221,6 +301,12 @@ fun MainScreen(
         
         Button(onClick = onTestSyncClick) {
             Text("Run Daily Sync Now")
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        Button(onClick = onTestWatchdogClick) {
+            Text("Test Watchdog Receiver")
         }
         
         Spacer(Modifier.height(32.dp))

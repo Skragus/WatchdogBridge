@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Health Connect Permissions -->
     <uses-permission android:name="android.permission.health.READ_STEPS"/>
@@ -14,6 +15,7 @@
     <uses-permission android:name="android.permission.health.READ_WEIGHT"/>
     <uses-permission android:name="android.permission.health.READ_BODY_FAT"/>
     <uses-permission android:name="android.permission.health.READ_NUTRITION"/>
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND"/>
 
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
@@ -59,6 +61,17 @@
                 <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
             </intent-filter>
         </activity-alias>
+
+        <!-- BroadcastReceiver for MacroDroid worker restart -->
+        <receiver 
+            android:name=".receiver.WorkerRestartReceiver" 
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.watchdogbridge.RESTART_DAILY_WORKER"/>
+                <action android:name="com.example.watchdogbridge.RESTART_INTRADAY_WORKER"/>
+                <action android:name="com.example.watchdogbridge.RESTART_ALL_WORKERS"/>
+            </intent-filter>
+        </receiver>
 
     </application>
 
