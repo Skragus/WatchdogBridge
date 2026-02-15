@@ -52,12 +52,14 @@ android {
             val key = localProperties.getProperty("apiKey")?.replace("\"", "") ?: ""
             buildConfigField("String", "BASE_URL", "\"https://sh-apk-api-production.up.railway.app/\"")
             buildConfigField("String", "API_KEY", "\"$key\"")
+            buildConfigField("Boolean", "WORKER_PROOF_OF_LIFE_ENABLED", "true")
         }
         create("prod") {
             dimension = "environment"
             val key = localProperties.getProperty("apiKey")?.replace("\"", "") ?: ""
             buildConfigField("String", "BASE_URL", "\"https://sh-apk-api-production.up.railway.app/\"")
             buildConfigField("String", "API_KEY", "\"$key\"")
+            buildConfigField("Boolean", "WORKER_PROOF_OF_LIFE_ENABLED", "false")
         }
     }
 

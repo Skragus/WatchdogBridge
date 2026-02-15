@@ -12,6 +12,8 @@ import com.example.watchdogbridge.data.model.DailyIngestRequest
 import com.example.watchdogbridge.data.model.Source
 import com.example.watchdogbridge.network.NetworkClient
 import com.example.watchdogbridge.util.DataHasher
+import com.example.watchdogbridge.BuildConfig
+import com.example.watchdogbridge.util.NotificationUtil
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -28,6 +30,12 @@ class HealthConnectIntradayWorker(
     private val TAG = "HCIntradayWorker"
 
     override suspend fun doWork(): Result {
+        if (BuildConfig.WORKER_PROOF_OF_LIFE_ENABLED) {
+            Log.d(TAG, "Proof of Life: Intraday Worker Ran.")
+            NotificationUtil.postProofOfLifeNotification(applicationContext, "Intraday Worker")
+            return Result.success()
+        }
+
         val startTime = System.currentTimeMillis()
         Log.i(TAG, "Starting intraday sync execution at $startTime")
 
