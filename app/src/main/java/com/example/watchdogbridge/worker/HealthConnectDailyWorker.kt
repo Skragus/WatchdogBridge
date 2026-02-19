@@ -55,6 +55,7 @@ class HealthConnectDailyWorker(
                 val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
                 
                 try {
+                    Log.d(TAG, "Checking data for $dateStr (i=$i)...")
                     val startOfDay = date.atStartOfDay(zoneId).toInstant().toEpochMilli()
                     val endOfDay = date.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli() - 1
 
@@ -68,10 +69,30 @@ class HealthConnectDailyWorker(
                     val exerciseSessions = healthConnectRepository.readExerciseSessions(startOfDay, endOfDay)
                     val bodyMetrics = healthConnectRepository.readBodyMetrics(startOfDay, endOfDay)
                     val nutritionSummary = healthConnectRepository.readNutritionSummary(startOfDay, endOfDay)
+                    
+                    // New metrics (Existing Set)
+                    val activeCalories = healthConnectRepository.readActiveCaloriesBurned(startOfDay, endOfDay)
+                    val distance = healthConnectRepository.readDistance(startOfDay, endOfDay)
+                    val hydration = healthConnectRepository.readHydration(startOfDay, endOfDay)
+                    val bloodPressure = healthConnectRepository.readBloodPressure(startOfDay, endOfDay)
+                    val vo2Max = healthConnectRepository.readVo2Max(startOfDay, endOfDay)
+                    
+                    // NEW: Broad metrics
+                    val totalCalories = healthConnectRepository.readTotalCaloriesBurned(startOfDay, endOfDay)
+                    val floorsClimbed = healthConnectRepository.readFloorsClimbed(startOfDay, endOfDay)
+                    val elevationGained = healthConnectRepository.readElevationGained(startOfDay, endOfDay)
+                    val bloodGlucose = healthConnectRepository.readBloodGlucose(startOfDay, endOfDay)
+                    val bodyTemperature = healthConnectRepository.readBodyTemperature(startOfDay, endOfDay)
+                    val oxygenSaturation = healthConnectRepository.readOxygenSaturation(startOfDay, endOfDay)
+                    val respiratoryRate = healthConnectRepository.readRespiratoryRate(startOfDay, endOfDay)
+                    val hrv = healthConnectRepository.readHrv(startOfDay, endOfDay)
+
+                    Log.d(TAG, "Stats for $dateStr: Steps=$steps, Sleep=${sleepSessions.size}, HR=${heartRateSummary != null}")
 
                     // Validation: Skip syncing a date if ALL major metrics are zero/empty
                     // This likely means Health Connect hasn't finished syncing or has no data yet.
-                    if (steps == 0 && sleepSessions.isEmpty() && heartRateSummary == null) {
+                    if (steps == 0 && sleepSessions.isEmpty() && heartRateSummary == null && 
+                        activeCalories == null && distance == null) {
                         Log.w(TAG, "Skipping $dateStr - no data available yet (HC not synced?)")
                         continue
                     }
@@ -84,6 +105,24 @@ class HealthConnectDailyWorker(
                         exerciseSessions = exerciseSessions,
                         bodyMetrics = bodyMetrics,
                         nutritionSummary = nutritionSummary,
+                        
+                        // Activity
+                        activeCaloriesBurned = activeCalories,
+                        totalCaloriesBurned = totalCalories,
+                        distanceMeters = distance,
+                        floorsClimbed = floorsClimbed,
+                        elevationGainedMeters = elevationGained,
+                        
+                        // Vitals
+                        hydrationLiters = hydration,
+                        bloodPressure = bloodPressure,
+                        bloodGlucose = bloodGlucose,
+                        bodyTemperature = bodyTemperature,
+                        vo2Max = vo2Max,
+                        oxygenSaturationPercentage = oxygenSaturation,
+                        respiratoryRateRpm = respiratoryRate,
+                        hrvRmssdMs = hrv,
+
                         source = Source(
                             deviceId = deviceId,
                             collectedAt = LocalDateTime.now().atZone(zoneId).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
@@ -92,7 +131,9 @@ class HealthConnectDailyWorker(
 
                     // Compute Hash
                     val currentHash = DataHasher.computeHash(request)
+                    Log.d(TAG, "Computed Hash for $dateStr: $currentHash. Stored Hash: ${lastState?.dataHash}")
 
+                    // Skip if data hasn't changed
                     if (lastState != null && lastState.dataHash == currentHash) {
                         Log.d(TAG, "Hash match for $dateStr, skipping.")
                         continue
