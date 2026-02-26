@@ -9,12 +9,26 @@ import androidx.health.connect.client.records.*
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonElement
+import com.google.gson.JsonPrimitive
+import com.google.gson.JsonSerializationContext
+import com.google.gson.JsonSerializer
+import kotlinx.coroutines.delay
+import java.lang.reflect.Type
 import java.time.Instant
 
 class HealthConnectRepository(private val context: Context) {
 
     private val TAG = "HealthConnectRepo"
-    private val gson = Gson()
+    
+    private val gson = GsonBuilder()
+        .registerTypeAdapter(Instant::class.java, object : JsonSerializer<Instant> {
+            override fun serialize(src: Instant?, typeOfSrc: Type?, context: JsonSerializationContext?): JsonElement {
+                return JsonPrimitive(src?.toString())
+            }
+        })
+        .create()
     
     private val healthConnectClient by lazy { 
         try {
@@ -83,6 +97,9 @@ class HealthConnectRepository(private val context: Context) {
 
         for (type in recordTypes) {
             try {
+                // Add a tiny delay to stay under Health Connect's aggressive rate limiter
+                delay(30) 
+                
                 val response = healthConnectClient.readRecords(
                     ReadRecordsRequest(
                         recordType = type,
@@ -93,7 +110,13 @@ class HealthConnectRepository(private val context: Context) {
                     rawData[type.simpleName ?: "Unknown"] = response.records
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to read raw data for ${type.simpleName}", e)
+                // If we hit a quota error, log it and wait longer
+                if (e.message?.contains("quota exceeded", ignoreCase = true) == true) {
+                    Log.w(TAG, "Quota exceeded for ${type.simpleName}, pausing...")
+                    delay(1000)
+                } else {
+                    Log.w(TAG, "Failed to read raw data for ${type.simpleName}", e)
+                }
             }
         }
         return try {

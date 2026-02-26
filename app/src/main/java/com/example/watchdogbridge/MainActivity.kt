@@ -10,14 +10,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
+import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -46,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -60,9 +66,12 @@ class MainActivity : ComponentActivity() {
     private val prefsRepo by lazy { PreferencesRepository(applicationContext) }
     private var statusText by mutableStateOf("Ready")
     
+    // Backfill stubs
+    private var backfillStartDate by mutableStateOf("2025-10-01")
+    private var backfillEndDate by mutableStateOf(LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
+
     private var onPermissionsResult: ((Boolean) -> Unit)? = null
     
-    // Health Connect Permission Launcher
     private val requestHealthPermissions = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) { granted ->
@@ -80,7 +89,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Schedule periodic workers
         WorkerUtil.scheduleWorkers(applicationContext)
 
         setContent {
@@ -89,6 +97,10 @@ class MainActivity : ComponentActivity() {
                     MainScreen(
                         modifier = Modifier.padding(innerPadding),
                         statusText = statusText,
+                        startDate = backfillStartDate,
+                        endDate = backfillEndDate,
+                        onStartDateChange = { backfillStartDate = it },
+                        onEndDateChange = { backfillEndDate = it },
                         onConnectClick = {
                             statusText = "Checking permissions..."
                             connectToHealth { success ->
@@ -96,7 +108,7 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onTestSyncClick = {
-                            statusText = "Daily Sync queued..."
+                            statusText = "Daily Sync (7 days) queued..."
                             testDailySync()
                         },
                         onCheckStatusClick = {
@@ -112,6 +124,9 @@ class MainActivity : ComponentActivity() {
                         },
                         onDebugSyncClick = {
                             sendDebugSync()
+                        },
+                        onTriggerBackfillClick = {
+                            triggerCustomBackfill()
                         }
                     )
                 }
@@ -130,12 +145,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun triggerCustomBackfill() {
+        statusText = "Custom Backfill queued: $backfillStartDate to $backfillEndDate"
+        val data = Data.Builder()
+            .putString("start_date", backfillStartDate)
+            .putString("end_date", backfillEndDate)
+            .build()
+
+        val request = OneTimeWorkRequestBuilder<HealthConnectDailyWorker>()
+            .setInputData(data)
+            .addTag("custom_backfill")
+            .build()
+        WorkManager.getInstance(applicationContext).enqueue(request)
+        observeWork(request.id, "Backfill")
+    }
+
     private fun testDailySync() {
         val request = OneTimeWorkRequestBuilder<HealthConnectDailyWorker>()
             .addTag("test_daily_sync")
             .build()
         WorkManager.getInstance(applicationContext).enqueue(request)
-
         observeWork(request.id, "Daily Sync")
     }
 
@@ -144,7 +173,6 @@ class MainActivity : ComponentActivity() {
             .addTag("manual_intraday_sync")
             .build()
         WorkManager.getInstance(applicationContext).enqueue(request)
-
         observeWork(request.id, "Intraday Sync")
     }
 
@@ -166,7 +194,7 @@ class MainActivity : ComponentActivity() {
                     rawJson = rawJson,
                     source = Source(
                         deviceId = deviceId,
-                        collectedAt = LocalDateTime.now().atZone(zoneId).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                        collectedAt = Instant.now().toString()
                     )
                 )
 
@@ -176,13 +204,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (response.isSuccessful) {
-                    statusText = "Debug Sync Success: ${response.code()}\nCheck API Console!"
+                    statusText = "Debug Sync Success: ${response.code()}"
                 } else {
-                    statusText = "Debug Sync Failed: ${response.code()}\n${response.errorBody()?.string()}"
+                    statusText = "Debug Sync Failed: ${response.code()}"
                 }
             } catch (e: Exception) {
                 statusText = "Debug Sync Error: ${e.message}"
-                Log.e("MainActivity", "Debug sync error", e)
             }
         }
     }
@@ -192,7 +219,7 @@ class MainActivity : ComponentActivity() {
             try {
                 AppDatabase.getDatabase(applicationContext).dailySyncStateDao().clearAll()
                 withContext(Dispatchers.Main) {
-                    statusText = "Daily Hashes Wiped! Run Sync Now."
+                    statusText = "Daily Hashes Wiped!"
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -206,14 +233,7 @@ class MainActivity : ComponentActivity() {
         WorkManager.getInstance(applicationContext).getWorkInfoByIdLiveData(id)
             .observe(this) { workInfo ->
                 if (workInfo != null) {
-                    val state = workInfo.state
-                    statusText = "$taskName: $state"
-                    if (state == WorkInfo.State.FAILED) {
-                        val error = workInfo.outputData.getString("error")
-                        if (error != null) {
-                            statusText += "\nError: $error"
-                        }
-                    }
+                    statusText = "$taskName: ${workInfo.state}"
                 }
             }
     }
@@ -232,22 +252,15 @@ class MainActivity : ComponentActivity() {
 
                 withContext(Dispatchers.Main) {
                     if (!workInfos.isNullOrEmpty()) {
-                        val workInfo = workInfos[0]
-                        val nextRun = if (workInfo.state == WorkInfo.State.ENQUEUED) {
-                            " (Scheduled)"
-                        } else {
-                            ""
-                        }
-                        statusText = "Intraday Worker: ${workInfo.state}$nextRun\nID: ${workInfo.id}\nLast Run: $lastRunText"
+                        statusText = "Intraday Worker: ${workInfos[0].state}\nLast Run: $lastRunText"
                     } else {
-                        statusText = "Intraday Worker not found (Not Scheduled)\nLast Run: $lastRunText"
+                        statusText = "Intraday Worker not scheduled\nLast Run: $lastRunText"
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    statusText = "Error checking status: ${e.message}"
+                    statusText = "Error: ${e.message}"
                 }
-                Log.e("MainActivity", "Error checking worker status", e)
             }
         }
     }
@@ -257,12 +270,17 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(
     modifier: Modifier = Modifier,
     statusText: String,
+    startDate: String,
+    endDate: String,
+    onStartDateChange: (String) -> Unit,
+    onEndDateChange: (String) -> Unit,
     onConnectClick: () -> Unit,
     onTestSyncClick: () -> Unit,
     onCheckStatusClick: () -> Unit,
     onTriggerIntradayClick: () -> Unit,
     onWipeHashesClick: () -> Unit,
-    onDebugSyncClick: () -> Unit
+    onDebugSyncClick: () -> Unit,
+    onTriggerBackfillClick: () -> Unit
 ) {
     Column(
         modifier = modifier
@@ -274,47 +292,71 @@ fun MainScreen(
     ) {
         Text("Health Connect Bridge", style = MaterialTheme.typography.headlineMedium)
         
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(24.dp))
         
-        Button(onClick = onConnectClick) {
+        Button(onClick = onConnectClick, modifier = Modifier.fillMaxWidth()) {
             Text("Connect Health Connect")
         }
         
         Spacer(Modifier.height(16.dp))
         
-        Button(onClick = onCheckStatusClick) {
-            Text("Check Periodic Status")
+        Button(onClick = onCheckStatusClick, modifier = Modifier.fillMaxWidth()) {
+            Text("Check Worker Status")
         }
 
         Spacer(Modifier.height(16.dp))
 
-        Button(onClick = onTriggerIntradayClick) {
-            Text("Run Intraday Now")
+        Button(onClick = onTriggerIntradayClick, modifier = Modifier.fillMaxWidth()) {
+            Text("Sync Today Now")
         }
         
         Spacer(Modifier.height(16.dp))
         
-        Button(onClick = onTestSyncClick) {
-            Text("Run Daily Sync Now")
-        }
-        
-        Spacer(Modifier.height(16.dp))
-        
-        Button(onClick = onWipeHashesClick) {
-            Text("Wipe Daily Hashes")
+        Button(onClick = onTestSyncClick, modifier = Modifier.fillMaxWidth()) {
+            Text("Sync Last 7 Days")
         }
 
         Spacer(Modifier.height(32.dp))
 
-        // Debug Section
-        Text("Debug Tools", style = MaterialTheme.typography.titleMedium)
+        // Backfill Section
+        Text("Custom Backfill", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
-        Button(onClick = onDebugSyncClick) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = startDate,
+                onValueChange = onStartDateChange,
+                label = { Text("Start (YYYY-MM-DD)") },
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            OutlinedTextField(
+                value = endDate,
+                onValueChange = onEndDateChange,
+                label = { Text("End (YYYY-MM-DD)") },
+                modifier = Modifier.weight(1f)
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onTriggerBackfillClick, modifier = Modifier.fillMaxWidth()) {
+            Text("Trigger Range Sync")
+        }
+
+        Spacer(Modifier.height(32.dp))
+
+        // Danger Zone
+        Text("Danger Zone", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onWipeHashesClick, modifier = Modifier.fillMaxWidth()) {
+            Text("Wipe Local Hashes (Force Re-sync)")
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = onDebugSyncClick, modifier = Modifier.fillMaxWidth()) {
             Text("Send Yesterday to /debug")
         }
         
         Spacer(Modifier.height(32.dp))
         
-        Text(text = statusText)
+        Text(text = statusText, style = MaterialTheme.typography.bodyMedium)
     }
 }

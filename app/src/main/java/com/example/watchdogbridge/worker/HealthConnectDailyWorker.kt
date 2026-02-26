@@ -14,10 +14,12 @@ import com.example.watchdogbridge.network.NetworkClient
 import com.example.watchdogbridge.util.DataHasher
 import com.example.watchdogbridge.BuildConfig
 import com.example.watchdogbridge.util.NotificationUtil
+import kotlinx.coroutines.delay
+import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 
 class HealthConnectDailyWorker(
     appContext: Context,
@@ -36,36 +38,38 @@ class HealthConnectDailyWorker(
             return Result.success()
         }
 
-        Log.d(TAG, "Starting daily (30-day) sync work")
+        val startStr = inputData.getString("start_date")
+        val endStr = inputData.getString("end_date")
+        val customDays = inputData.getInt("days", 7)
+
+        val today = LocalDate.now()
+        val backfillStartDate = if (startStr != null) LocalDate.parse(startStr) else today.minusDays(customDays.toLong())
+        val backfillEndDate = if (endStr != null) LocalDate.parse(endStr) else today
+
+        Log.i(TAG, "Starting daily sync range: $backfillStartDate to $backfillEndDate")
         
         try {
             val deviceId = preferencesRepository.getDeviceId()
-
             if (!healthConnectRepository.hasPermissions()) {
                 Log.e(TAG, "Permissions missing")
                 return Result.failure()
             }
 
-            val today = LocalDate.now()
             val zoneId = ZoneId.systemDefault()
+            val daysToSync = ChronoUnit.DAYS.between(backfillStartDate, backfillEndDate).toInt()
 
-            for (i in 1..30) {
-                val date = today.minusDays(i.toLong())
+            for (i in 0..daysToSync) {
+                val date = backfillEndDate.minusDays(i.toLong())
                 val dateStr = date.format(DateTimeFormatter.ISO_LOCAL_DATE)
                 
                 try {
-                    Log.d(TAG, "Checking data for $dateStr (i=$i)...")
                     val startOfDay = date.atStartOfDay(zoneId).toInstant().toEpochMilli()
                     val endOfDay = date.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli() - 1
 
                     val lastState = syncStateDao.getSyncState(dateStr)
-
-                    // Fetch Raw Data Blob (Agnostic Approach)
                     val rawJson = healthConnectRepository.readRawData(startOfDay, endOfDay)
 
-                    // Skip if the blob is empty (no data found for this day)
-                    if (rawJson == "{}" || rawJson.isEmpty()) {
-                        Log.d(TAG, "No data found for $dateStr, skipping.")
+                    if (rawJson == "{}" || rawJson.isEmpty() || rawJson.contains("Serialization failed")) {
                         continue
                     }
 
@@ -74,18 +78,20 @@ class HealthConnectDailyWorker(
                         rawJson = rawJson,
                         source = Source(
                             deviceId = deviceId,
-                            collectedAt = LocalDateTime.now().atZone(zoneId).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                            collectedAt = Instant.now().toString()
                         )
                     )
 
                     val currentHash = DataHasher.computeHash(request)
-                    Log.d(TAG, "Computed Hash for $dateStr: $currentHash")
+                    if (lastState != null && lastState.dataHash == currentHash) {
+                        continue
+                    }
 
-                    // Send to API
                     Log.d(TAG, "Syncing $dateStr...")
                     val response = NetworkClient.api.postDaily(request)
                     
                     if (response.isSuccessful) {
+                        Log.i(TAG, "Successfully synced $dateStr (Code: ${response.code()})")
                         val newState = DailySyncState(
                             date = dateStr,
                             dataHash = currentHash,
@@ -94,32 +100,17 @@ class HealthConnectDailyWorker(
                             lastError = null
                         )
                         syncStateDao.insertOrUpdate(newState)
-                        Log.d(TAG, "Sync successful for $dateStr")
                     } else {
-                        Log.e(TAG, "Failed for $dateStr: ${response.code()}")
-                        val errorState = lastState?.let {
-                            it.copy(
-                                lastAttemptedAt = System.currentTimeMillis(),
-                                lastError = "HTTP ${response.code()}",
-                                attemptCount = it.attemptCount + 1
-                            )
-                        } ?: DailySyncState(
-                            date = dateStr,
-                            dataHash = currentHash,
-                            lastAttemptedAt = System.currentTimeMillis(),
-                            lastError = "HTTP ${response.code()}",
-                            attemptCount = 1
-                        )
-                        syncStateDao.insertOrUpdate(errorState)
+                        Log.e(TAG, "Failed for $dateStr: ${response.code()} ${response.message()}")
                     }
+
+                    delay(300)
 
                 } catch (e: Exception) {
                     Log.e(TAG, "Error processing $dateStr", e)
                 }
             }
-
             return Result.success()
-
         } catch (e: Exception) {
             Log.e(TAG, "Global error in daily worker", e)
             return Result.failure()

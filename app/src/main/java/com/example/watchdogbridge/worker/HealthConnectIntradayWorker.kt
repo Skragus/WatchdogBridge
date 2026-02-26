@@ -14,8 +14,8 @@ import com.example.watchdogbridge.network.NetworkClient
 import com.example.watchdogbridge.util.DataHasher
 import com.example.watchdogbridge.BuildConfig
 import com.example.watchdogbridge.util.NotificationUtil
+import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
@@ -67,7 +67,7 @@ class HealthConnectIntradayWorker(
                 rawJson = rawJson,
                 source = Source(
                     deviceId = deviceId,
-                    collectedAt = LocalDateTime.now().atZone(zoneId).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                    collectedAt = Instant.now().toString() // Matches V3 schema Z format
                 )
             )
 
@@ -103,7 +103,7 @@ class HealthConnectIntradayWorker(
             Log.e(TAG, "Error in intraday worker", e)
             return Result.retry()
         } finally {
-            preferencesRepository.setLastIntradayRun(System.currentTimeMillis())
+            updateLastRunTime()
         }
     }
 
