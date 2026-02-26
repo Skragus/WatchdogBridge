@@ -37,7 +37,7 @@ class HealthConnectIntradayWorker(
         }
 
         val startTimeMillis = System.currentTimeMillis()
-        Log.i(TAG, "Starting agnostic intraday sync at $startTimeMillis")
+        Log.i(TAG, "Starting intraday sync at $startTimeMillis")
 
         try {
             val deviceId = preferencesRepository.getDeviceId()
@@ -53,21 +53,20 @@ class HealthConnectIntradayWorker(
                 return Result.retry()
             }
 
+            Log.d(TAG, "Querying Health Connect for $dateStr (From: ${Instant.ofEpochMilli(startOfDay)} To: ${Instant.ofEpochMilli(now)})")
+
             // Fetch Raw Data Blob
             val rawJson = healthConnectRepository.readRawData(startOfDay, now)
 
-            if (rawJson == "{}" || rawJson.isEmpty()) {
-                Log.i(TAG, "No data for today yet, skipping.")
-                updateLastRunTime()
-                return Result.success()
-            }
+            // We no longer skip if rawJson is "{}" because "no data is still data" for today.
+            // The DataHasher will handle skipping if the "no data" state hasn't changed.
 
             val request = DailyIngestRequest(
                 date = dateStr,
                 rawJson = rawJson,
                 source = Source(
                     deviceId = deviceId,
-                    collectedAt = Instant.now().toString() // Matches V3 schema Z format
+                    collectedAt = Instant.now().toString()
                 )
             )
 
@@ -81,6 +80,7 @@ class HealthConnectIntradayWorker(
             }
 
             // Send to API
+            Log.d(TAG, "Sending intraday payload to API...")
             val response = NetworkClient.api.postIntraday(request)
             
             if (response.isSuccessful) {
@@ -91,16 +91,16 @@ class HealthConnectIntradayWorker(
                     attemptCount = 0
                 )
                 syncStateDao.insertOrUpdate(newState)
-                Log.i(TAG, "Agnostic intraday sync successful.")
+                Log.i(TAG, "Intraday sync successful for $dateStr (Code: ${response.code()})")
                 updateLastRunTime()
                 return Result.success()
             } else {
-                Log.e(TAG, "Server error: ${response.code()}")
+                Log.e(TAG, "Server error: ${response.code()} ${response.message()}")
                 return Result.retry()
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error in intraday worker", e)
+            Log.e(TAG, "Error in intraday worker: ${e.message}", e)
             return Result.retry()
         } finally {
             updateLastRunTime()

@@ -88,17 +88,16 @@ class HealthConnectRepository(private val context: Context) {
         }
     }
 
-    /**
-     * Captures ALL records for the given time range as a single JSON string.
-     */
     suspend fun readRawData(startTime: Long, endTime: Long): String {
+        Log.d(TAG, "Reading raw data: ${Instant.ofEpochMilli(startTime)} -> ${Instant.ofEpochMilli(endTime)}")
         val rawData = mutableMapOf<String, List<Record>>()
         val filter = TimeRangeFilter.between(Instant.ofEpochMilli(startTime), Instant.ofEpochMilli(endTime))
+        var errorCount = 0
 
         for (type in recordTypes) {
             try {
-                // Add a tiny delay to stay under Health Connect's aggressive rate limiter
-                delay(30) 
+                // Increased delay to 800ms between types
+                delay(800) 
                 
                 val response = healthConnectClient.readRecords(
                     ReadRecordsRequest(
@@ -110,20 +109,20 @@ class HealthConnectRepository(private val context: Context) {
                     rawData[type.simpleName ?: "Unknown"] = response.records
                 }
             } catch (e: Exception) {
-                // If we hit a quota error, log it and wait longer
+                errorCount++
                 if (e.message?.contains("quota exceeded", ignoreCase = true) == true) {
-                    Log.w(TAG, "Quota exceeded for ${type.simpleName}, pausing...")
-                    delay(1000)
+                    Log.w(TAG, "Quota hit for ${type.simpleName}, 40s pause...")
+                    delay(40000) // Increased back-off
                 } else {
-                    Log.w(TAG, "Failed to read raw data for ${type.simpleName}", e)
+                    Log.w(TAG, "Read failed for ${type.simpleName}", e)
                 }
             }
         }
-        return try {
-            gson.toJson(rawData)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error serializing raw Health Connect data", e)
-            "{ \"error\": \"Serialization failed: ${e.message}\" }"
+
+        if (rawData.isEmpty() && errorCount > 0) {
+            throw IllegalStateException("Sync failed: all API calls hit quota limits")
         }
+
+        return gson.toJson(rawData)
     }
 }

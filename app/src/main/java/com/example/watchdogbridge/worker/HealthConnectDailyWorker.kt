@@ -26,31 +26,46 @@ class HealthConnectDailyWorker(
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
 
-    private val preferencesRepository = PreferencesRepository(appContext)
-    private val healthConnectRepository = HealthConnectRepository(appContext)
     private val syncStateDao = AppDatabase.getDatabase(appContext).dailySyncStateDao()
     private val TAG = "HCDailyWorker"
 
     override suspend fun doWork(): Result {
         if (BuildConfig.WORKER_PROOF_OF_LIFE_ENABLED) {
-            Log.d(TAG, "Proof of Life: Daily Worker Ran.")
             NotificationUtil.postProofOfLifeNotification(applicationContext, "Daily Worker")
             return Result.success()
         }
 
         val startStr = inputData.getString("start_date")
         val endStr = inputData.getString("end_date")
-        val customDays = inputData.getInt("days", 7)
+        val customDays = inputData.getInt("days", -1)
 
         val today = LocalDate.now()
-        val backfillStartDate = if (startStr != null) LocalDate.parse(startStr) else today.minusDays(customDays.toLong())
+        
+        val backfillStartDate = when {
+            startStr != null -> {
+                Log.i(TAG, "Using INPUT start_date: $startStr")
+                LocalDate.parse(startStr)
+            }
+            customDays != -1 -> {
+                Log.i(TAG, "Using INPUT custom days: $customDays")
+                today.minusDays(customDays.toLong())
+            }
+            else -> {
+                Log.i(TAG, "Using DEFAULT maintenance (Yesterday)")
+                today.minusDays(1)
+            }
+        }
+        
         val backfillEndDate = if (endStr != null) LocalDate.parse(endStr) else today
 
-        Log.i(TAG, "Starting daily sync range: $backfillStartDate to $backfillEndDate")
+        Log.i(TAG, "Sync range resolved: $backfillStartDate to $backfillEndDate")
         
         try {
-            val deviceId = preferencesRepository.getDeviceId()
-            if (!healthConnectRepository.hasPermissions()) {
+            val healthRepo = HealthConnectRepository(applicationContext)
+            val prefsRepo = PreferencesRepository(applicationContext)
+            val deviceId = prefsRepo.getDeviceId()
+
+            if (!healthRepo.hasPermissions()) {
                 Log.e(TAG, "Permissions missing")
                 return Result.failure()
             }
@@ -67,11 +82,7 @@ class HealthConnectDailyWorker(
                     val endOfDay = date.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli() - 1
 
                     val lastState = syncStateDao.getSyncState(dateStr)
-                    val rawJson = healthConnectRepository.readRawData(startOfDay, endOfDay)
-
-                    if (rawJson == "{}" || rawJson.isEmpty() || rawJson.contains("Serialization failed")) {
-                        continue
-                    }
+                    val rawJson = healthRepo.readRawData(startOfDay, endOfDay)
 
                     val request = DailyIngestRequest(
                         date = dateStr,
@@ -91,29 +102,29 @@ class HealthConnectDailyWorker(
                     val response = NetworkClient.api.postDaily(request)
                     
                     if (response.isSuccessful) {
-                        Log.i(TAG, "Successfully synced $dateStr (Code: ${response.code()})")
-                        val newState = DailySyncState(
+                        syncStateDao.insertOrUpdate(DailySyncState(
                             date = dateStr,
                             dataHash = currentHash,
-                            lastSyncedAt = System.currentTimeMillis(),
-                            attemptCount = 0,
-                            lastError = null
-                        )
-                        syncStateDao.insertOrUpdate(newState)
+                            lastSyncedAt = System.currentTimeMillis()
+                        ))
+                        Log.i(TAG, "Synced $dateStr (200)")
                     } else {
-                        Log.e(TAG, "Failed for $dateStr: ${response.code()} ${response.message()}")
+                        Log.e(TAG, "Failed $dateStr (${response.code()})")
                     }
 
-                    delay(300)
+                    delay(1000)
 
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error processing $dateStr", e)
+                    Log.e(TAG, "Error processing $dateStr: ${e.message}")
+                    if (e.message?.contains("quota exceeded", ignoreCase = true) == true) {
+                        delay(30000)
+                    }
                 }
             }
             return Result.success()
         } catch (e: Exception) {
-            Log.e(TAG, "Global error in daily worker", e)
-            return Result.failure()
+            Log.e(TAG, "Worker failed", e)
+            return Result.retry()
         }
     }
 }

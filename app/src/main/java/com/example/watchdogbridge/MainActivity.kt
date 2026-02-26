@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -66,7 +67,6 @@ class MainActivity : ComponentActivity() {
     private val prefsRepo by lazy { PreferencesRepository(applicationContext) }
     private var statusText by mutableStateOf("Ready")
     
-    // Backfill stubs
     private var backfillStartDate by mutableStateOf("2025-10-01")
     private var backfillEndDate by mutableStateOf(LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE))
 
@@ -127,6 +127,9 @@ class MainActivity : ComponentActivity() {
                         },
                         onTriggerBackfillClick = {
                             triggerCustomBackfill()
+                        },
+                        onCancelAllClick = {
+                            cancelAllWork()
                         }
                     )
                 }
@@ -174,6 +177,11 @@ class MainActivity : ComponentActivity() {
             .build()
         WorkManager.getInstance(applicationContext).enqueue(request)
         observeWork(request.id, "Intraday Sync")
+    }
+
+    private fun cancelAllWork() {
+        WorkManager.getInstance(applicationContext).cancelAllWork()
+        statusText = "All Workers Cancelled!"
     }
 
     private fun sendDebugSync() {
@@ -242,7 +250,9 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val workManager = WorkManager.getInstance(applicationContext)
-                val workInfos = workManager.getWorkInfosForUniqueWork("HealthConnectIntradaySync").get()
+                val dailyInfos = workManager.getWorkInfosForUniqueWork("HealthConnectDailySync").get()
+                val intraInfos = workManager.getWorkInfosForUniqueWork("HealthConnectIntradaySync").get()
+                
                 val lastRun = prefsRepo.getLastIntradayRun()
                 val lastRunText = if (lastRun > 0) {
                      SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(lastRun))
@@ -251,11 +261,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 withContext(Dispatchers.Main) {
-                    if (!workInfos.isNullOrEmpty()) {
-                        statusText = "Intraday Worker: ${workInfos[0].state}\nLast Run: $lastRunText"
-                    } else {
-                        statusText = "Intraday Worker not scheduled\nLast Run: $lastRunText"
-                    }
+                    val dailyState = if (!dailyInfos.isNullOrEmpty()) dailyInfos[0].state.toString() else "Not Found"
+                    val intraState = if (!intraInfos.isNullOrEmpty()) intraInfos[0].state.toString() else "Not Found"
+                    statusText = "Daily: $dailyState\nIntraday: $intraState\nLast Run: $lastRunText"
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -280,7 +288,8 @@ fun MainScreen(
     onTriggerIntradayClick: () -> Unit,
     onWipeHashesClick: () -> Unit,
     onDebugSyncClick: () -> Unit,
-    onTriggerBackfillClick: () -> Unit
+    onTriggerBackfillClick: () -> Unit,
+    onCancelAllClick: () -> Unit
 ) {
     Column(
         modifier = modifier
@@ -341,13 +350,22 @@ fun MainScreen(
             Text("Trigger Range Sync")
         }
 
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onCancelAllClick, 
+            modifier = Modifier.fillMaxWidth(),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+        ) {
+            Text("Cancel All Pending Syncs")
+        }
+
         Spacer(Modifier.height(32.dp))
 
         // Danger Zone
         Text("Danger Zone", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
         Spacer(Modifier.height(8.dp))
         Button(onClick = onWipeHashesClick, modifier = Modifier.fillMaxWidth()) {
-            Text("Wipe Local Hashes (Force Re-sync)")
+            Text("Wipe Local Hashes")
         }
 
         Spacer(Modifier.height(16.dp))
