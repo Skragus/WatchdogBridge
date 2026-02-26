@@ -2,64 +2,25 @@ package com.example.watchdogbridge.util
 
 import com.example.watchdogbridge.data.model.DailyIngestRequest
 import java.security.MessageDigest
-import java.util.Locale
 
 object DataHasher {
 
+    /**
+     * Computes a SHA-256 hash of the agnostic payload.
+     * We hash the date, the source app/device, and the entire raw JSON blob.
+     */
     fun computeHash(data: DailyIngestRequest): String {
-        // Build a canonical string representation
         val sb = StringBuilder()
         
-        // Version prefix to handle future schema changes
-        sb.append("v1|")
+        // Version prefix to force re-sync if the hashing logic ever changes
+        sb.append("v3|") 
 
-        // 1. Core Data
         sb.append("date=${data.date}|")
-        sb.append("steps=${data.stepsTotal}|")
-
-        // 2. Sleep Sessions (Sorted)
-        val sortedSleep = data.sleepSessions.sortedBy { it.startTime }
-        sb.append("sleep=[")
-        sortedSleep.forEach { 
-            sb.append("{s=${it.startTime},e=${it.endTime},d=${it.durationMinutes}},")
-        }
-        sb.append("]|")
-
-        // 3. Heart Rate Summary
-        val hr = data.heartRateSummary
-        if (hr != null) {
-            sb.append("hr={avg=${hr.avgHr},min=${hr.minHr},max=${hr.maxHr},rest=${hr.restingHr}}|")
-        } else {
-            sb.append("hr=null|")
-        }
-
-        // 4. Body Metrics
-        val body = data.bodyMetrics
-        if (body != null) {
-            // Round to 2 decimal places
-            val w = body.weightKg?.let { "%.2f".format(Locale.US, it) } ?: "null"
-            val f = body.bodyFatPercentage?.let { "%.2f".format(Locale.US, it) } ?: "null"
-            sb.append("body={w=$w,f=$f}|")
-        } else {
-            sb.append("body=null|")
-        }
-
-        // 5. Nutrition
-        val nut = data.nutritionSummary
-        if (nut != null) {
-            val p = nut.proteinGrams?.let { "%.2f".format(Locale.US, it) } ?: "null"
-            sb.append("nut={cal=${nut.caloriesTotal},prot=$p}|")
-        } else {
-            sb.append("nut=null|")
-        }
-
-        // 6. Exercise Sessions (Sorted)
-        val sortedExercise = data.exerciseSessions.sortedBy { it.startTime }
-        sb.append("ex=[")
-        sortedExercise.forEach {
-            sb.append("{s=${it.startTime},e=${it.endTime},d=${it.durationMinutes},t=${it.title}},")
-        }
-        sb.append("]")
+        sb.append("app=${data.source.sourceApp}|")
+        sb.append("device=${data.source.deviceId}|")
+        
+        // We hash the entire raw blob to detect ANY change in underlying Health Connect records
+        sb.append("raw=${data.rawJson}")
 
         return sha256(sb.toString())
     }

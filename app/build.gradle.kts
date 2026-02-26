@@ -17,7 +17,7 @@ if (localPropertiesFile.exists()) {
 
 android {
     namespace = "com.example.watchdogbridge"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.watchdogbridge"
@@ -50,14 +50,16 @@ android {
             dimension = "environment"
             applicationIdSuffix = ".staging"
             val key = localProperties.getProperty("apiKey")?.replace("\"", "") ?: ""
-            buildConfigField("String", "BASE_URL", "\"https://sh-apk-api-production.up.railway.app/\"")
+            val url = localProperties.getProperty("baseUrl")?.replace("\"", "") ?: "https://api.example.com/"
+            buildConfigField("String", "BASE_URL", "\"$url\"")
             buildConfigField("String", "API_KEY", "\"$key\"")
             buildConfigField("Boolean", "WORKER_PROOF_OF_LIFE_ENABLED", "true")
         }
         create("prod") {
             dimension = "environment"
             val key = localProperties.getProperty("apiKey")?.replace("\"", "") ?: ""
-            buildConfigField("String", "BASE_URL", "\"https://sh-apk-api-production.up.railway.app/\"")
+            val url = localProperties.getProperty("baseUrl")?.replace("\"", "") ?: "https://api.example.com/"
+            buildConfigField("String", "BASE_URL", "\"$url\"")
             buildConfigField("String", "API_KEY", "\"$key\"")
             buildConfigField("Boolean", "WORKER_PROOF_OF_LIFE_ENABLED", "false")
         }
@@ -70,7 +72,7 @@ android {
 }
 
 dependencies {
-    implementation("androidx.health.connect:connect-client:1.1.0-alpha07")
+    implementation("androidx.health.connect:connect-client:1.2.0-alpha02")
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)

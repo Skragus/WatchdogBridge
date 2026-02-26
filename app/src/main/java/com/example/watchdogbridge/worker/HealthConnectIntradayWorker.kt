@@ -36,67 +36,54 @@ class HealthConnectIntradayWorker(
             return Result.success()
         }
 
-        val startTime = System.currentTimeMillis()
-        Log.i(TAG, "Starting intraday sync execution at $startTime")
+        val startTimeMillis = System.currentTimeMillis()
+        Log.i(TAG, "Starting agnostic intraday sync at $startTimeMillis")
 
         try {
             val deviceId = preferencesRepository.getDeviceId()
-
-            // Target: Today
             val today = LocalDate.now()
             val dateStr = today.format(DateTimeFormatter.ISO_LOCAL_DATE)
             val zoneId = ZoneId.systemDefault()
             
-            // Start of day until NOW
             val startOfDay = today.atStartOfDay(zoneId).toInstant().toEpochMilli()
             val now = System.currentTimeMillis()
 
             if (!healthConnectRepository.hasPermissions()) {
-                Log.w(TAG, "Permissions missing, cannot sync. Retrying later.")
-                // Using retry() so WorkManager keeps this job alive and tries again
-                // (though without permissions, it will keep failing until granted)
+                Log.w(TAG, "Permissions missing")
                 return Result.retry()
             }
 
-            // Fetch Data
-            val steps = healthConnectRepository.readDailySteps(startOfDay, now)
-            val sleepSessions = healthConnectRepository.readSleepSessions(startOfDay, now)
-            val heartRateSummary = healthConnectRepository.readHeartRateSummary(startOfDay, now)
-            val exerciseSessions = healthConnectRepository.readExerciseSessions(startOfDay, now)
-            val bodyMetrics = healthConnectRepository.readBodyMetrics(startOfDay, now)
-            val nutritionSummary = healthConnectRepository.readNutritionSummary(startOfDay, now)
+            // Fetch Raw Data Blob
+            val rawJson = healthConnectRepository.readRawData(startOfDay, now)
+
+            if (rawJson == "{}" || rawJson.isEmpty()) {
+                Log.i(TAG, "No data for today yet, skipping.")
+                updateLastRunTime()
+                return Result.success()
+            }
 
             val request = DailyIngestRequest(
                 date = dateStr,
-                stepsTotal = steps,
-                sleepSessions = sleepSessions,
-                heartRateSummary = heartRateSummary,
-                exerciseSessions = exerciseSessions,
-                bodyMetrics = bodyMetrics,
-                nutritionSummary = nutritionSummary,
+                rawJson = rawJson,
                 source = Source(
                     deviceId = deviceId,
                     collectedAt = LocalDateTime.now().atZone(zoneId).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
                 )
             )
 
-            // Compute Hash
             val currentHash = DataHasher.computeHash(request)
             
-            // Check Local State
             val lastState = syncStateDao.getSyncState(dateStr)
             if (lastState != null && lastState.dataHash == currentHash) {
-                Log.i(TAG, "Data unchanged for $dateStr (Hash: $currentHash), skipping upload.")
+                Log.i(TAG, "Data unchanged for $dateStr, skipping upload.")
                 updateLastRunTime()
                 return Result.success()
             }
 
             // Send to API
-            Log.d(TAG, "Sending intraday data to API... Hash: $currentHash")
             val response = NetworkClient.api.postIntraday(request)
             
             if (response.isSuccessful) {
-                // Update State
                 val newState = DailySyncState(
                     date = dateStr,
                     dataHash = currentHash,
@@ -104,23 +91,19 @@ class HealthConnectIntradayWorker(
                     attemptCount = 0
                 )
                 syncStateDao.insertOrUpdate(newState)
-                Log.i(TAG, "Intraday sync successful. Response: ${response.code()}")
+                Log.i(TAG, "Agnostic intraday sync successful.")
                 updateLastRunTime()
                 return Result.success()
             } else {
-                Log.e(TAG, "Server error: ${response.code()} ${response.message()}")
-                // Ideally update 'lastError' in DB here too
+                Log.e(TAG, "Server error: ${response.code()}")
                 return Result.retry()
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error in intraday worker execution", e)
-            // Retry on exception ensures transient errors don't kill the periodic schedule
-            // (Though PeriodicWorkRequest stays alive on failure too, retry allows backoff)
+            Log.e(TAG, "Error in intraday worker", e)
             return Result.retry()
         } finally {
-            val duration = System.currentTimeMillis() - startTime
-            Log.i(TAG, "Intraday worker finished in ${duration}ms")
+            preferencesRepository.setLastIntradayRun(System.currentTimeMillis())
         }
     }
 

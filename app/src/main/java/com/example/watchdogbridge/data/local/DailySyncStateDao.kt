@@ -15,4 +15,7 @@ interface DailySyncStateDao {
 
     @Query("SELECT * FROM daily_sync_state")
     suspend fun getAll(): List<DailySyncState>
+
+    @Query("DELETE FROM daily_sync_state")
+    suspend fun clearAll()
 }

@@ -7,15 +7,19 @@ import retrofit2.http.Body
 import retrofit2.http.POST
 
 interface IngestApi {
-    @POST("/v1/ingest/shealth/daily")
+    @POST("/v1/ingest/daily")
     suspend fun postDaily(@Body body: DailyIngestRequest): Response<IngestResponse>
 
-    @POST("/v1/ingest/shealth/intraday")
+    @POST("/v1/ingest/intraday")
     suspend fun postIntraday(@Body body: DailyIngestRequest): Response<IngestResponse>
+
+    @POST("/v1/ingest/debug")
+    suspend fun postDebug(@Body body: DailyIngestRequest): Response<IngestResponse>
 }
 
 @Serializable
 data class IngestResponse(
     val status: String,
-    val upserted: Boolean
+    val inserted: Boolean? = null,
+    val id: String? = null
 )

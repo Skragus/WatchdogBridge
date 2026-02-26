@@ -1,17 +1,13 @@
 package com.example.watchdogbridge
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -31,7 +27,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.lifecycleScope
 import androidx.work.OneTimeWorkRequestBuilder
@@ -39,6 +34,10 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.example.watchdogbridge.data.HealthConnectRepository
 import com.example.watchdogbridge.data.PreferencesRepository
+import com.example.watchdogbridge.data.local.AppDatabase
+import com.example.watchdogbridge.data.model.DailyIngestRequest
+import com.example.watchdogbridge.data.model.Source
+import com.example.watchdogbridge.network.NetworkClient
 import com.example.watchdogbridge.ui.theme.WatchdogBridgeTheme
 import com.example.watchdogbridge.worker.HealthConnectDailyWorker
 import com.example.watchdogbridge.worker.HealthConnectIntradayWorker
@@ -47,8 +46,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 class MainActivity : ComponentActivity() {
 
@@ -72,26 +76,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Notification Permission Launcher (Android 13+)
-    private val requestNotificationPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted: Boolean ->
-        if (isGranted) {
-            statusText = "Notification Permission Granted"
-        } else {
-            statusText = "Notification Permission Denied. Please enable in Settings."
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         // Schedule periodic workers
         WorkerUtil.scheduleWorkers(applicationContext)
-
-        // Check for Notification Permission on startup (Android 13+)
-        checkNotificationPermission()
 
         setContent {
             WatchdogBridgeTheme {
@@ -117,52 +107,16 @@ class MainActivity : ComponentActivity() {
                             statusText = "Intraday Sync queued..."
                             triggerIntradaySync()
                         },
-                        onTestWatchdogClick = {
-                            testWatchdogReceiver()
+                        onWipeHashesClick = {
+                            wipeDailyHashes()
                         },
-                        onRequestNotifyClick = {
-                            if (Build.VERSION.SDK_INT >= 33) {
-                                if (shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
-                                    statusText = "Please allow notifications in the dialog."
-                                    requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                } else if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                                    // Likely permanently denied or first time
-                                    requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                } else {
-                                    statusText = "Notifications already enabled."
-                                }
-                            } else {
-                                // Check if notifications are disabled at app level
-                                val notificationManager = getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
-                                if (!notificationManager.areNotificationsEnabled()) {
-                                    statusText = "Notifications are disabled. Opening Settings..."
-                                    openAppSettings()
-                                } else {
-                                    statusText = "Notifications enabled (Android < 13)"
-                                }
-                            }
+                        onDebugSyncClick = {
+                            sendDebugSync()
                         }
                     )
                 }
             }
         }
-    }
-
-    private fun checkNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                // We'll let the user trigger it via button to avoid spamming on launch, 
-                // or just log it. For now, let's leave it to the UI button.
-                Log.d("MainActivity", "Notification permission not granted yet.")
-            }
-        }
-    }
-    
-    private fun openAppSettings() {
-        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-            data = Uri.fromParts("package", packageName, null)
-        }
-        startActivity(intent)
     }
 
     private fun connectToHealth(onResult: (Boolean) -> Unit) {
@@ -194,14 +148,61 @@ class MainActivity : ComponentActivity() {
         observeWork(request.id, "Intraday Sync")
     }
 
-    private fun testWatchdogReceiver() {
-        val intent = android.content.Intent("com.example.watchdogbridge.RESTART_ALL_WORKERS")
-        intent.setPackage(packageName)
-        sendBroadcast(intent)
-        statusText = "Watchdog Broadcast Sent!"
+    private fun sendDebugSync() {
+        lifecycleScope.launch {
+            statusText = "Fetching yesterday's data for debug..."
+            try {
+                val yesterday = LocalDate.now().minusDays(1)
+                val dateStr = yesterday.format(DateTimeFormatter.ISO_LOCAL_DATE)
+                val zoneId = ZoneId.systemDefault()
+                val startOfDay = yesterday.atStartOfDay(zoneId).toInstant().toEpochMilli()
+                val endOfDay = yesterday.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli() - 1
+
+                val rawJson = healthRepo.readRawData(startOfDay, endOfDay)
+                val deviceId = prefsRepo.getDeviceId()
+
+                val request = DailyIngestRequest(
+                    date = dateStr,
+                    rawJson = rawJson,
+                    source = Source(
+                        deviceId = deviceId,
+                        collectedAt = LocalDateTime.now().atZone(zoneId).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+                    )
+                )
+
+                statusText = "Sending to /v1/ingest/debug..."
+                val response = withContext(Dispatchers.IO) {
+                    NetworkClient.api.postDebug(request)
+                }
+
+                if (response.isSuccessful) {
+                    statusText = "Debug Sync Success: ${response.code()}\nCheck API Console!"
+                } else {
+                    statusText = "Debug Sync Failed: ${response.code()}\n${response.errorBody()?.string()}"
+                }
+            } catch (e: Exception) {
+                statusText = "Debug Sync Error: ${e.message}"
+                Log.e("MainActivity", "Debug sync error", e)
+            }
+        }
+    }
+    
+    private fun wipeDailyHashes() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                AppDatabase.getDatabase(applicationContext).dailySyncStateDao().clearAll()
+                withContext(Dispatchers.Main) {
+                    statusText = "Daily Hashes Wiped! Run Sync Now."
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    statusText = "Failed to wipe hashes: ${e.message}"
+                }
+            }
+        }
     }
 
-    private fun observeWork(id: java.util.UUID, taskName: String) {
+    private fun observeWork(id: UUID, taskName: String) {
         WorkManager.getInstance(applicationContext).getWorkInfoByIdLiveData(id)
             .observe(this) { workInfo ->
                 if (workInfo != null) {
@@ -260,8 +261,8 @@ fun MainScreen(
     onTestSyncClick: () -> Unit,
     onCheckStatusClick: () -> Unit,
     onTriggerIntradayClick: () -> Unit,
-    onTestWatchdogClick: () -> Unit,
-    onRequestNotifyClick: () -> Unit
+    onWipeHashesClick: () -> Unit,
+    onDebugSyncClick: () -> Unit
 ) {
     Column(
         modifier = modifier
@@ -280,12 +281,6 @@ fun MainScreen(
         }
         
         Spacer(Modifier.height(16.dp))
-
-        Button(onClick = onRequestNotifyClick) {
-            Text("Enable Notifications")
-        }
-
-        Spacer(Modifier.height(16.dp))
         
         Button(onClick = onCheckStatusClick) {
             Text("Check Periodic Status")
@@ -302,11 +297,20 @@ fun MainScreen(
         Button(onClick = onTestSyncClick) {
             Text("Run Daily Sync Now")
         }
-
+        
         Spacer(Modifier.height(16.dp))
+        
+        Button(onClick = onWipeHashesClick) {
+            Text("Wipe Daily Hashes")
+        }
 
-        Button(onClick = onTestWatchdogClick) {
-            Text("Test Watchdog Receiver")
+        Spacer(Modifier.height(32.dp))
+
+        // Debug Section
+        Text("Debug Tools", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onDebugSyncClick) {
+            Text("Send Yesterday to /debug")
         }
         
         Spacer(Modifier.height(32.dp))
