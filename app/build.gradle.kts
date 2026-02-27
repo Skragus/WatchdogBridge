@@ -16,11 +16,11 @@ if (localPropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.example.watchdogbridge"
+    namespace = "com.example.healthconnectbridge"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.example.watchdogbridge"
+        applicationId = "com.example.healthconnectbridge"
         minSdk = 29
         targetSdk = 34
         versionCode = 1

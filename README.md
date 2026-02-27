@@ -1,35 +1,21 @@
-# WatchdogBridge
+# HealthConnectBridge
 
-**Android Health Connect Sync Bridge**
+**Android Health Connect Sync Bridge (Field Agnostic)**
 
-A native Android app that reads health metrics from Health Connect (Google/Samsung) and syncs them to a custom API backend. Built with modern Android architecture and resilient background sync.
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| **Language** | Kotlin |
-| **UI** | Jetpack Compose |
-| **Architecture** | MVVM + Repository Pattern |
-| **Health Data** | Health Connect API |
-| **Networking** | Retrofit + OkHttp + Kotlinx Serialization |
-| **Local Storage** | Room Database |
-| **Background Work** | WorkManager (periodic + expedited) |
-| **Build** | Gradle with product flavors |
+A native Android app that acts as a transparent bridge between the Android Health Connect API and your custom backend. Unlike traditional sync apps, HealthConnectBridge is **field-agnostic**: it captures the raw Health Connect record data, serializes it into a JSON blob, and sends it to your API, allowing your backend to handle schema parsing and data extraction.
 
 ---
 
-## Features
+## Key Features
 
-- **Health Connect Integration**: Reads steps, workouts, sleep, nutrition, body metrics, heart rate, and more
+- **Field-Agnostic Engine (V3)**: No manual mapping of health fields. Automatically captures and sends full raw Health Connect records.
+- **Deep Backfill Support**: Trigger custom range syncs (e.g., from Q4 2025 to now) directly from the UI.
+- **Intelligent Throttling**: Built-in rate-limiting logic to navigate Health Connect API quotas during bulk backfills.
 - **Dual Sync Strategy**: 
-  - Daily sync (60min interval) for aggregated summaries
-  - Intraday sync (15min interval) for real-time updates
-- **Resilient Background Sync**: Workers restart automatically if stalled
-- **Offline-First**: Sync state tracked locally, retries on failure
-- **MacroDroid Watchdog**: External automation can trigger worker restarts via broadcast intents
+  - Daily maintenance sync for periodic updates.
+  - Intraday sync (60min interval) for fresh data throughout the day.
+- **Resilient Background Sync**: Built with WorkManager; state is tracked locally using Room to prevent duplicate uploads.
+- **Debug Tools**: Built-in button to send a full day of raw data to a `/debug` endpoint for schema inspection.
 
 ---
 
@@ -38,120 +24,76 @@ A native Android app that reads health metrics from Health Connect (Google/Samsu
 ```
 Health Connect (Android)
     ↓
-HealthConnectRepository
+HealthConnectRepository (Raw Record Fetcher)
     ↓
-Room Database (sync state)
+DataHasher (SHA-256 Change Detection)
     ↓
-WorkManager (PeriodicWorkRequest)
+Room Database (Sync State / Hashes)
     ↓
-IngestApi (Retrofit)
+WorkManager (Periodic + Range Tasks)
     ↓
-SH-APK-API Backend
+IngestApi (V3 Agnostic Payload)
+    ↓
+Custom API Backend
 ```
 
-### Key Components
+### Components
 
 | Component | Responsibility |
 |-----------|---------------|
-| `HealthConnectRepository` | Reads from Health Connect SDK |
-| `SamsungHealthRepository` | Legacy Samsung Health SDK support |
-| `PreferencesRepository` | User settings and sync preferences |
-| `DailySyncState` / `IntradaySyncState` | Tracks last sync timestamps |
-| `WorkerRestartReceiver` | Broadcast receiver for external watchdog triggers |
+| `HealthConnectRepository` | Iterates through 26+ record types and captures raw data. |
+| `DailyIngestRequest` | Agnostic V3 wrapper containing metadata and the raw JSON blob. |
+| `PreferencesRepository` | Stores Device ID and sync timestamps. |
+| `DailySyncState` | Tracks day-by-day hashes to avoid redundant network calls. |
 
 ---
 
-## Build Setup
+## API Integration (V3 Schema)
 
-### Prerequisites
+The app POSTs to `/v1/ingest/daily` and `/v1/ingest/intraday`.
 
-- Android Studio Hedgehog or newer
-- Android SDK 34
-- Health Connect app installed on device
-
-### Configuration
-
-Create `local.properties` in project root:
-
-```properties
-apiKey=your-backend-api-key
-```
-
-The build system injects this into `BuildConfig.API_KEY`.
-
-### Product Flavors
-
-| Flavor | Purpose |
-|--------|---------|
-| `staging` | Debug builds with verbose logging |
-| `prod` | Release builds, minimal logging |
-
----
-
-## Permissions
-
-The app requests extensive Health Connect permissions:
-- Activity: steps, distance, floors, elevation
-- Body: weight, body fat, height, BMI
-- Vitals: heart rate, sleep, blood pressure, SpO2
-- Exercise: workout sessions, calories burned
-- Nutrition: food intake, hydration
-
-See `AndroidManifest.xml` for full list.
-
----
-
-## API Integration
-
-Syncs to a FastAPI backend ([SH-APK-API](https://github.com/Skragus/SH-APK-API)):
-
-```kotlin
-interface IngestApi {
-    @POST("/v1/ingest/shealth/daily")
-    suspend fun postDaily(@Body body: DailyIngestRequest): Response<IngestResponse>
-
-    @POST("/v1/ingest/shealth/intraday")
-    suspend fun postIntraday(@Body body: DailyIngestRequest): Response<IngestResponse>
+**Payload Structure:**
+```json
+{
+  "schema_version": 3,
+  "date": "2026-02-26",
+  "raw_json": "{\"StepsRecord\":[...], \"HeartRateRecord\":[...] }",
+  "source": {
+    "source_app": "health_connect",
+    "device_id": "unique-uuid-here",
+    "collected_at": "2026-02-26T21:00:00Z"
+  }
 }
 ```
 
 ---
 
-## Watchdog / Automation
+## Build Setup
 
-External automation (MacroDroid, Tasker) can restart workers via broadcast:
+### Configuration
 
-```kotlin
-// Restart daily worker
-Intent("com.example.watchdogbridge.RESTART_DAILY_WORKER")
+Create `local.properties` in the project root:
 
-// Restart intraday worker  
-Intent("com.example.watchdogbridge.RESTART_INTRADAY_WORKER")
-
-// Restart all workers
-Intent("com.example.watchdogbridge.RESTART_ALL_WORKERS")
+```properties
+apiKey="your-secret-key"
+baseUrl="https://your-api-endpoint.com/"
 ```
 
-See `MACRODROID_WATCHDOG_SETUP.md` for detailed automation setup.
+- `apiKey` is injected into the `X-API-Key` header.
+- `baseUrl` defines your backend destination.
+
+### Build & Run
+
+1. Clone the repo.
+2. Setup `local.properties` as shown above.
+3. Open in Android Studio.
+4. Build the `prod` or `staging` flavor.
 
 ---
 
-## Development
+## Development & Debugging
 
-```bash
-git clone https://github.com/Skragus/WatchdogBridge.git
-cd WatchdogBridge
-
-# Open in Android Studio
-# Create local.properties with your API key
-# Build and run
-```
-
----
-
-## Related Projects
-
-- [SH-APK-API](https://github.com/Skragus/SH-APK-API) — Backend API that receives the health data
+Use the **"Send Yesterday to /debug"** button in the app UI to verify your backend is correctly receiving the raw JSON strings. This payload is sent to your `baseUrl` + `/v1/ingest/debug`.
 
 ---
 

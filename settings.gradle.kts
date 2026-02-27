@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "WatchdogBridge"
+rootProject.name = "HealthConnectBridge"
 include(":app")
